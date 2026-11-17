@@ -2,6 +2,7 @@ import Foundation
 import Cocoa
 import SwiftUI
 import GhosttyKit
+import os
 
 /// Controller for the "quick" terminal.
 class QuickTerminalController: BaseTerminalController {
@@ -48,10 +49,23 @@ class QuickTerminalController: BaseTerminalController {
     }
 
     /// All tabs, in display order. Empty until the first surface is created.
-    @Published private(set) var tabs: [Tab] = []
+    @Published private(set) var tabs: [Tab] = [] { didSet { logTabs() } }
 
     /// Index of the tab whose tree is `surfaceTree`.
-    @Published private(set) var selectedTab: Int = 0
+    @Published private(set) var selectedTab: Int = 0 { didSet { logTabs() } }
+
+    /// Tab changes, for debugging. Watch with:
+    /// log stream --predicate 'category == "quick-terminal"'
+    static let log = Logger(subsystem: Bundle.main.bundleIdentifier!, category: "quick-terminal")
+
+    /// One line per change to `tabs` or `selectedTab`: the surface count of
+    /// each tab, with the selected one starred.
+    private func logTabs() {
+        let desc = tabs.enumerated()
+            .map { "\($0 == selectedTab ? "*" : "")\(Array($1.tree).count)" }
+            .joined(separator: ",")
+        Self.log.notice("tabs=[\(desc, privacy: .public)]")
+    }
 
     override var focusedSurface: Ghostty.SurfaceView? {
         didSet {
@@ -414,6 +428,7 @@ class QuickTerminalController: BaseTerminalController {
         var config = baseConfig ?? Ghostty.SurfaceConfiguration()
         config.environmentVariables["GHOSTTY_QUICK_TERMINAL"] = "1"
         let view = Ghostty.SurfaceView(app, baseConfig: config)
+        Self.log.notice("new tab cwd=\(config.workingDirectory ?? "-", privacy: .public)")
 
         let index = tabs.isEmpty ? 0 : selectedTab + 1
         tabs.insert(Tab(tree: SplitTree(view: view), focused: view), at: index)
@@ -587,6 +602,7 @@ class QuickTerminalController: BaseTerminalController {
         if surfaceTree.isEmpty,
            let ghostty_app = ghostty.app {
             if let tree = restorationState?.surfaceTree, !tree.isEmpty {
+                Self.log.notice("restoring selected=\(Array(tree).count) other tabs=\(self.restorationState?.otherTabs.count ?? 0)")
                 surfaceTree = tree
                 restoreOtherTabs()
                 let view = tree.first(where: { $0.id.uuidString == restorationState?.focusedSurface }) ?? tree.first!

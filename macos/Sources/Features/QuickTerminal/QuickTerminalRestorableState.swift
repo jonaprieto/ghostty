@@ -66,6 +66,7 @@ extension QuickTerminalRestorableState {
 extension QuickTerminalRestorableState.InternalState where ViewType == Ghostty.SurfaceView {
     init(from controller: QuickTerminalController) {
         let selected = controller.selectedTab
+        QuickTerminalController.log.notice("saving \(controller.tabs.count) tabs")
         self.init(
             focusedSurface: controller.focusedSurface?.id.uuidString,
             surfaceTree: controller.surfaceTree,
