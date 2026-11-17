@@ -733,6 +733,12 @@ extension Ghostty {
                 checkForUpdates(app)
 
             case GHOSTTY_ACTION_OPEN_URL:
+                if target.tag == GHOSTTY_TARGET_SURFACE,
+                   let surface = target.target.surface,
+                   let surfaceView = self.surfaceView(from: surface),
+                   openClickedPath(Ghostty.Action.OpenURL(c: action.action.open_url), from: surfaceView) {
+                    return true
+                }
                 return openURL(action.action.open_url)
 
             case GHOSTTY_ACTION_UNDO:
@@ -852,6 +858,64 @@ extension Ghostty {
 
             // Open with the default application for the URL
             NSWorkspace.shared.open(url)
+            return true
+        }
+
+        /// Fork: a clicked path that exists on this Mac opens where it is worked
+        /// with. A folder opens in a new split to the right, a text or source file
+        /// in Zed at the clicked `:line[:column]`. Anything else (URLs, PDFs,
+        /// other files) returns false and takes the normal path, which uses the
+        /// system default apps. Nothing here runs or launches the clicked file.
+        private static func openClickedPath(_ action: Action.OpenURL, from surfaceView: SurfaceView) -> Bool {
+            guard action.kind == .unknown,
+                  URL(string: action.url)?.scheme == nil,
+                  !UntrustedURL.containsUnsafeCharacters(action.url) else { return false }
+
+            // Split off a trailing :line or :line:column, as in compiler output.
+            var path = action.url
+            var position = ""
+            if let range = path.range(of: #"(:\d+){1,2}$"#, options: .regularExpression) {
+                position = String(path[range])
+                path.removeSubrange(range)
+            }
+
+            // The core resolves plain relative paths, but not ones with a
+            // position, since it checks that the whole text exists.
+            path = NSString(string: path).expandingTildeInPath
+            if !path.hasPrefix("/") {
+                guard let pwd = surfaceView.pwd else { return false }
+                path = NSString(string: pwd).appendingPathComponent(path)
+            }
+            path = NSString(string: path).standardizingPath
+
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) else { return false }
+
+            if isDirectory.boolValue {
+                guard let controller = BaseTerminalController.controller(owning: surfaceView) else { return false }
+                var config = SurfaceConfiguration()
+                config.workingDirectory = path
+                // Asks ~/.local/bin/ghostty-tmux for a new session here instead
+                // of reattaching a detached one.
+                config.environmentVariables["GHOSTTY_TMUX_NEW"] = "1"
+                return controller.newSplit(at: surfaceView, direction: .right, baseConfig: config) != nil
+            }
+
+            guard let type = UTType(filenameExtension: URL(filePath: path).pathExtension),
+                  type.conforms(to: .text) || type.conforms(to: .sourceCode),
+                  let zed = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "dev.zed.Zed")
+            else { return false }
+
+            // Zed's command line tool understands path:line:column.
+            let cli = Process()
+            cli.executableURL = zed.appending(path: "Contents/MacOS/cli")
+            cli.arguments = [path + position]
+            do {
+                try cli.run()
+            } catch {
+                Ghostty.logger.warning("could not run Zed's cli: \(error, privacy: .public)")
+                return false
+            }
             return true
         }
 
