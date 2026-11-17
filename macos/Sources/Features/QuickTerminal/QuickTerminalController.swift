@@ -458,6 +458,27 @@ class QuickTerminalController: BaseTerminalController {
         }
     }
 
+    /// Add the hidden tabs from restoration state around the selected tab,
+    /// which `surfaceTree` already holds.
+    private func restoreOtherTabs() {
+        guard let state = restorationState, tabs.count == 1 else { return }
+        var restored = state.otherTabs
+            .filter { !$0.isEmpty }
+            .map { Tab(tree: $0, focused: $0.first) }
+        guard !restored.isEmpty else { return }
+
+        for view in restored.flatMap({ Array($0.tree) }) {
+            if let surface = view.surface {
+                ghostty_surface_set_occlusion(surface, false)
+            }
+        }
+
+        let index = min(max(state.selectedTab, 0), restored.count)
+        restored.insert(tabs[0], at: index)
+        tabs = restored
+        selectedTab = index
+    }
+
     /// Move the selected tab by `amount` positions, stopping at either end.
     func moveSelectedTab(by amount: Int) {
         guard tabs.indices.contains(selectedTab) else { return }
@@ -567,6 +588,7 @@ class QuickTerminalController: BaseTerminalController {
            let ghostty_app = ghostty.app {
             if let tree = restorationState?.surfaceTree, !tree.isEmpty {
                 surfaceTree = tree
+                restoreOtherTabs()
                 let view = tree.first(where: { $0.id.uuidString == restorationState?.focusedSurface }) ?? tree.first!
                 focusedSurface = view
                 // Add a short delay to check if the correct surface is focused.

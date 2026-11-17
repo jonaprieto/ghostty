@@ -37,6 +37,28 @@ struct TerminalRestorableTests {
         #expect(state.surfaceTree.contains(where: { $0.id.uuidString == "994C673F-B4C5-49EE-B044-65006652636D" }))
     }
 
+    @MainActor
+    @Test func quickTerminalRestorableTabsRoundTrip() throws {
+        let selected = try SplitTreeTests.makeHorizontalSplit()
+        let other = MockView()
+        let state = DummyQuickTerminalRestorableState(.init(
+            focusedSurface: nil,
+            surfaceTree: selected.0,
+            screenStateEntries: [:],
+            otherTabs: [SplitTree(view: other)],
+            selectedTab: 1,
+        ))
+
+        let data = try archive(CodableBridge(state), className: "CodableBridge<QuickTerminal>")
+        let decoded: CodableBridge<DummyQuickTerminalRestorableState> = try unarchive(data, className: "CodableBridge<QuickTerminal>")
+        let restored = decoded.value.internalState
+
+        #expect(restored.selectedTab == 1)
+        #expect(restored.otherTabs?.count == 1)
+        #expect(restored.otherTabs?.first?.contains(where: { $0.id == other.id }) == true)
+        #expect(restored.surfaceTree.contains(where: { $0.id == selected.1.id }))
+    }
+
     // To generate old data: created a dummy class, archive, and copy the printed result
     @MainActor
     @Test func restoreTerminal57() throws {
