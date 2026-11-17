@@ -38,6 +38,29 @@ class QuickTerminalController: BaseTerminalController {
     let restorable: Bool
     private var restorationState: QuickTerminalRestorableState?
 
+    /// A quick terminal tab. The quick terminal is a borderless panel, so it
+    /// can't use native window tabs; it keeps its own list instead. The
+    /// selected tab's tree is `surfaceTree`, the others are held here.
+    struct Tab: Identifiable {
+        let id = UUID()
+        var tree: SplitTree<Ghostty.SurfaceView>
+        var focused: Ghostty.SurfaceView?
+    }
+
+    /// All tabs, in display order. Empty until the first surface is created.
+    @Published private(set) var tabs: [Tab] = []
+
+    /// Index of the tab whose tree is `surfaceTree`.
+    @Published private(set) var selectedTab: Int = 0
+
+    override var focusedSurface: Ghostty.SurfaceView? {
+        didSet {
+            guard let focusedSurface, tabs.indices.contains(selectedTab),
+                  tabs[selectedTab].tree.contains(focusedSurface) else { return }
+            tabs[selectedTab].focused = focusedSurface
+        }
+    }
+
     init(_ ghostty: Ghostty.App,
          position: QuickTerminalPosition = .top,
          baseConfig base: Ghostty.SurfaceConfiguration? = nil,
@@ -90,6 +113,11 @@ class QuickTerminalController: BaseTerminalController {
             self,
             selector: #selector(windowDidResize(_:)),
             name: NSWindow.didResizeNotification,
+            object: nil)
+        center.addObserver(
+            self,
+            selector: #selector(onCloseHiddenSurface(_:)),
+            name: Ghostty.Notification.ghosttyCloseSurface,
             object: nil)
     }
 
@@ -267,11 +295,29 @@ class QuickTerminalController: BaseTerminalController {
     override func surfaceTreeDidChange(from: SplitTree<Ghostty.SurfaceView>, to: SplitTree<Ghostty.SurfaceView>) {
         super.surfaceTreeDidChange(from: from, to: to)
 
-        // If our surface tree is nil then we animate the window out. We
-        // defer reinitializing the tree to save some memory here.
         if to.isEmpty {
+            // The selected tab lost its last surface by some path other than
+            // closeTab (e.g. closing a root split). Drop just that tab. This
+            // can't run synchronously: we're inside surfaceTree's didSet.
+            if tabs.count > 1 {
+                let id = tabs[selectedTab].id
+                DispatchQueue.main.async { self.closeTabImmediately(id: id) }
+                return
+            }
+
+            // If our surface tree is nil then we animate the window out. We
+            // defer reinitializing the tree to save some memory here.
+            tabs = []
+            selectedTab = 0
             animateOut()
             return
+        }
+
+        if tabs.isEmpty {
+            tabs = [Tab(tree: to, focused: focusedSurface)]
+            selectedTab = 0
+        } else {
+            tabs[selectedTab].tree = to
         }
 
         // If we're not empty (e.g. this isn't the first set) and we're
@@ -299,6 +345,17 @@ class QuickTerminalController: BaseTerminalController {
             return
         }
 
+        // With more than one tab, closing a tab's last surface closes the tab.
+        if tabs.count > 1 {
+            let id = tabs[selectedTab].id
+            if surface.processExited || !withConfirmation {
+                closeTabImmediately(id: id)
+            } else {
+                confirmCloseTab(id: id)
+            }
+            return
+        }
+
         // If its the root, we check if the process exited. If it did,
         // then we do empty the tree.
         if surface.processExited {
@@ -319,6 +376,91 @@ class QuickTerminalController: BaseTerminalController {
         var config = config ?? Ghostty.SurfaceConfiguration()
         config.environmentVariables["GHOSTTY_QUICK_TERMINAL"] = "1"
         return super.newSplit(at: oldView, direction: direction, baseConfig: config)
+    }
+
+    // MARK: Tabs
+
+    /// Open a new tab to the right of the selected one and select it.
+    func newTab(baseConfig: Ghostty.SurfaceConfiguration? = nil) {
+        guard let app = ghostty.app else { return }
+        var config = baseConfig ?? Ghostty.SurfaceConfiguration()
+        config.environmentVariables["GHOSTTY_QUICK_TERMINAL"] = "1"
+        let view = Ghostty.SurfaceView(app, baseConfig: config)
+
+        let index = tabs.isEmpty ? 0 : selectedTab + 1
+        tabs.insert(Tab(tree: SplitTree(view: view), focused: view), at: index)
+        selectTab(index)
+    }
+
+    /// Make the tab at `index` the visible one.
+    func selectTab(_ index: Int) {
+        guard tabs.indices.contains(index) else { return }
+        let tab = tabs[index]
+
+        // Surfaces leaving the view stop rendering until their tab returns;
+        // syncSurfaceTreeOcclusionState turns them back on when it does.
+        for view in surfaceTree where !tab.tree.contains(view) {
+            if let surface = view.surface {
+                ghostty_surface_set_occlusion(surface, false)
+            }
+            view.isWindowVisible = false
+        }
+
+        // Undo entries capture whole trees of the previously selected tab and
+        // would replace this tab's tree if replayed.
+        undoManager?.removeAllActions(withTarget: self)
+
+        selectedTab = index
+        surfaceTree = tab.tree
+        let focus = tab.focused ?? tab.tree.first
+        focusedSurface = focus
+        if let focus {
+            DispatchQueue.main.async { Ghostty.moveFocus(to: focus) }
+        }
+    }
+
+    /// Close a tab, asking first if any of its surfaces has a running process.
+    func closeTab(id: Tab.ID) {
+        guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        let tree = index == selectedTab ? surfaceTree : tabs[index].tree
+        if tree.contains(where: { $0.needsConfirmQuit }) {
+            confirmCloseTab(id: id)
+        } else {
+            closeTabImmediately(id: id)
+        }
+    }
+
+    private func confirmCloseTab(id: Tab.ID) {
+        confirmClose(
+            messageText: "Close Tab?",
+            informativeText: "The terminal still has a running process. If you close the tab the process will be killed."
+        ) { [weak self] in
+            self?.closeTabImmediately(id: id)
+        }
+    }
+
+    func closeTabImmediately(id: Tab.ID) {
+        guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+
+        // The last tab behaves like the quick terminal always has: the tree
+        // empties and the window animates out.
+        guard tabs.count > 1 else {
+            surfaceTree = .init()
+            return
+        }
+
+        // Select a neighbor first so the closing tab's tree leaves the view.
+        if index == selectedTab {
+            selectTab(index < tabs.count - 1 ? index + 1 : index - 1)
+        }
+
+        // Dropping the tab releases its surfaces, which ends their processes.
+        // Undo entries may still hold them, so clear those too.
+        undoManager?.removeAllActions(withTarget: self)
+        tabs.remove(at: index)
+        if index < selectedTab {
+            selectedTab -= 1
+        }
     }
 
     // MARK: Methods
@@ -645,15 +787,6 @@ class QuickTerminalController: BaseTerminalController {
         return await super.confirmCloseAsync(messageText: messageText, informativeText: informativeText, confirmButtonTitle: confirmButtonTitle)
     }
 
-    private func showNoNewTabAlert() {
-        guard let window else { return }
-        let alert = NSAlert()
-        alert.messageText = "Cannot Create New Tab"
-        alert.informativeText = "Tabs aren't supported in the Quick Terminal."
-        alert.addButton(withTitle: "OK")
-        alert.alertStyle = .warning
-        alert.beginSheetModal(for: window)
-    }
     // MARK: First Responder
 
     @IBAction override func closeWindow(_ sender: Any) {
@@ -662,7 +795,14 @@ class QuickTerminalController: BaseTerminalController {
     }
 
     @IBAction func newTab(_ sender: Any?) {
-        showNoNewTabAlert()
+        // Go through libghostty so the new tab inherits the working directory.
+        guard let surface = focusedSurface?.surface else { return }
+        ghostty.newTab(surface: surface)
+    }
+
+    @IBAction func closeTab(_ sender: Any?) {
+        guard tabs.indices.contains(selectedTab) else { return }
+        closeTab(id: tabs[selectedTab].id)
     }
 
     @IBAction func toggleGhosttyFullScreen(_ sender: Any) {
@@ -733,9 +873,29 @@ class QuickTerminalController: BaseTerminalController {
     @objc private func onNewTab(notification: SwiftUI.Notification) {
         guard let surfaceView = notification.object as? Ghostty.SurfaceView else { return }
         guard let window = surfaceView.window else { return }
-        guard window.windowController is QuickTerminalController else { return }
-        // Tabs aren't supported with Quick Terminals or derivatives
-        showNoNewTabAlert()
+        guard window.windowController === self else { return }
+        let config = notification.userInfo?[Ghostty.Notification.NewSurfaceConfigKey]
+        newTab(baseConfig: config as? Ghostty.SurfaceConfiguration)
+    }
+
+    /// The base controller only closes surfaces in the selected tab's tree.
+    /// A process can also exit in a hidden tab; remove its surface here.
+    @objc private func onCloseHiddenSurface(_ notification: Notification) {
+        guard let target = notification.object as? Ghostty.SurfaceView,
+              !surfaceTree.contains(target),
+              let index = tabs.firstIndex(where: { $0.tree.contains(target) }),
+              let node = tabs[index].tree.root?.node(view: target) else { return }
+
+        let tree = tabs[index].tree.removing(node)
+        if tree.isEmpty {
+            closeTabImmediately(id: tabs[index].id)
+            return
+        }
+
+        tabs[index].tree = tree
+        if tabs[index].focused === target {
+            tabs[index].focused = tree.first
+        }
     }
 
     private struct DerivedConfig {
