@@ -1,12 +1,12 @@
 import SwiftUI
 
-/// Tab bar for the quick terminal, shown once there is more than one tab.
+/// Tab bar for the quick terminal, shown even with a single tab.
 /// The quick terminal can't use native window tabs (see QuickTerminalController.Tab).
 struct QuickTerminalTabBar: View {
     @ObservedObject var controller: QuickTerminalController
 
     var body: some View {
-        if controller.tabs.count > 1 {
+        if !controller.tabs.isEmpty {
             HStack(spacing: 1) {
                 ForEach(Array(controller.tabs.enumerated()), id: \.element.id) { index, tab in
                     if let surface = tab.focused ?? tab.tree.first {
