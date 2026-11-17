@@ -87,6 +87,9 @@ class AppDelegate: NSObject,
     @IBOutlet private var menuChangeTabTitle: NSMenuItem?
     @IBOutlet private var menuReadonly: NSMenuItem?
     @IBOutlet private var menuQuickTerminal: NSMenuItem?
+
+    /// Menu bar icon that toggles the quick terminal.
+    private var quickTerminalStatusItem: NSStatusItem?
     @IBOutlet private var menuTerminalInspector: NSMenuItem?
     @IBOutlet private var menuCommandPalette: NSMenuItem?
 
@@ -345,6 +348,7 @@ class AppDelegate: NSObject,
 
         // Setup our menu
         setupMenuImages()
+        setupQuickTerminalStatusItem()
 
         // Setup signal handlers
         setupSignals()
@@ -371,6 +375,15 @@ class AppDelegate: NSObject,
                 NSApp.arrangeInFront(nil)
             }
         }
+    }
+
+    private func setupQuickTerminalStatusItem() {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        item.button?.image = NSImage(systemSymbolName: "terminal", accessibilityDescription: "Quick Terminal")
+        item.button?.target = self
+        item.button?.action = #selector(toggleQuickTerminal(_:))
+        item.button?.toolTip = "Quick Terminal"
+        quickTerminalStatusItem = item
     }
 
     func applicationDidHide(_ notification: Notification) {
