@@ -119,6 +119,31 @@ class QuickTerminalController: BaseTerminalController {
             selector: #selector(onCloseHiddenSurface(_:)),
             name: Ghostty.Notification.ghosttyCloseSurface,
             object: nil)
+        center.addObserver(
+            self,
+            selector: #selector(onGotoTab(_:)),
+            name: Ghostty.Notification.ghosttyGotoTab,
+            object: nil)
+        center.addObserver(
+            self,
+            selector: #selector(onMoveTab(_:)),
+            name: .ghosttyMoveTab,
+            object: nil)
+        center.addObserver(
+            self,
+            selector: #selector(onCloseTab(_:)),
+            name: .ghosttyCloseTab,
+            object: nil)
+        center.addObserver(
+            self,
+            selector: #selector(onCloseOtherTabs(_:)),
+            name: .ghosttyCloseOtherTabs,
+            object: nil)
+        center.addObserver(
+            self,
+            selector: #selector(onCloseTabsOnTheRight(_:)),
+            name: .ghosttyCloseTabsOnTheRight,
+            object: nil)
     }
 
     required init?(coder: NSCoder) {
@@ -431,6 +456,40 @@ class QuickTerminalController: BaseTerminalController {
         } else {
             closeTabImmediately(id: id)
         }
+    }
+
+    /// Move the selected tab by `amount` positions, stopping at either end.
+    func moveSelectedTab(by amount: Int) {
+        guard tabs.indices.contains(selectedTab) else { return }
+        let target = max(0, min(tabs.count - 1, selectedTab + amount))
+        guard target != selectedTab else { return }
+        tabs.insert(tabs.remove(at: selectedTab), at: target)
+        selectedTab = target
+    }
+
+    /// Close every tab whose index satisfies `shouldClose`, asking first if
+    /// any of them has a running process. The selected tab is never closed.
+    private func closeTabs(where shouldClose: (Int) -> Bool) {
+        let ids = tabs.indices
+            .filter { $0 != selectedTab && shouldClose($0) }
+            .map { tabs[$0].id }
+        guard !ids.isEmpty else { return }
+
+        let close = { [weak self] in
+            for id in ids { self?.closeTabImmediately(id: id) }
+        }
+        let needsConfirm = tabs
+            .filter { ids.contains($0.id) }
+            .contains { $0.tree.contains(where: { $0.needsConfirmQuit }) }
+        guard needsConfirm else {
+            close()
+            return
+        }
+
+        confirmClose(
+            messageText: "Close Tabs?",
+            informativeText: "At least one tab still has a running process. If you close the tabs the processes will be killed.",
+            completion: close)
     }
 
     private func confirmCloseTab(id: Tab.ID) {
@@ -808,6 +867,15 @@ class QuickTerminalController: BaseTerminalController {
         closeTab(id: tabs[selectedTab].id)
     }
 
+    @IBAction func closeOtherTabs(_ sender: Any?) {
+        closeTabs { _ in true }
+    }
+
+    @IBAction func closeTabsOnTheRight(_ sender: Any?) {
+        let selected = selectedTab
+        closeTabs { $0 > selected }
+    }
+
     @IBAction func toggleGhosttyFullScreen(_ sender: Any) {
         guard let surface = focusedSurface?.surface else { return }
         ghostty.toggleFullscreen(surface: surface)
@@ -879,6 +947,53 @@ class QuickTerminalController: BaseTerminalController {
         guard window.windowController === self else { return }
         let config = notification.userInfo?[Ghostty.Notification.NewSurfaceConfigKey]
         newTab(baseConfig: config as? Ghostty.SurfaceConfiguration)
+    }
+
+    @objc private func onGotoTab(_ notification: Notification) {
+        guard let target = notification.object as? Ghostty.SurfaceView,
+              surfaceTree.contains(target),
+              let tab = notification.userInfo?[Ghostty.Notification.GotoTabKey] as? ghostty_action_goto_tab_e,
+              tabs.count > 1 else { return }
+
+        let count = tabs.count
+        switch tab {
+        case GHOSTTY_GOTO_TAB_PREVIOUS:
+            selectTab((selectedTab - 1 + count) % count)
+        case GHOSTTY_GOTO_TAB_NEXT:
+            selectTab((selectedTab + 1) % count)
+        case GHOSTTY_GOTO_TAB_LAST:
+            selectTab(count - 1)
+        default:
+            // Other values are 1-indexed tab numbers, clamped to the last tab.
+            guard tab.rawValue >= 1 else { return }
+            selectTab(min(Int(tab.rawValue) - 1, count - 1))
+        }
+    }
+
+    @objc private func onMoveTab(_ notification: Notification) {
+        guard let target = notification.object as? Ghostty.SurfaceView,
+              surfaceTree.contains(target),
+              let action = notification.userInfo?[Notification.Name.GhosttyMoveTabKey] as? Ghostty.Action.MoveTab
+        else { return }
+        moveSelectedTab(by: action.amount)
+    }
+
+    @objc private func onCloseTab(_ notification: Notification) {
+        guard let target = notification.object as? Ghostty.SurfaceView,
+              surfaceTree.contains(target) else { return }
+        closeTab(self)
+    }
+
+    @objc private func onCloseOtherTabs(_ notification: Notification) {
+        guard let target = notification.object as? Ghostty.SurfaceView,
+              surfaceTree.contains(target) else { return }
+        closeOtherTabs(self)
+    }
+
+    @objc private func onCloseTabsOnTheRight(_ notification: Notification) {
+        guard let target = notification.object as? Ghostty.SurfaceView,
+              surfaceTree.contains(target) else { return }
+        closeTabsOnTheRight(self)
     }
 
     /// The base controller only closes surfaces in the selected tab's tree.

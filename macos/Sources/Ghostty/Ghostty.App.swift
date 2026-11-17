@@ -1250,6 +1250,15 @@ extension Ghostty {
             }
         }
 
+        /// The number of tabs in the window holding a surface. The quick
+        /// terminal keeps its own tabs instead of a native tab group.
+        private static func tabCount(of surfaceView: SurfaceView) -> Int {
+            if let quick = surfaceView.window?.windowController as? QuickTerminalController {
+                return quick.tabs.count
+            }
+            return surfaceView.window?.tabGroup?.windows.count ?? 0
+        }
+
         private static func moveTab(
             _ app: ghostty_app_t,
             target: ghostty_target_s,
@@ -1264,7 +1273,7 @@ extension Ghostty {
                     guard let surfaceView = self.surfaceView(from: surface) else { return false }
 
                     // See gotoTab for notes on this check.
-                    guard (surfaceView.window?.tabGroup?.windows.count ?? 0) > 1 else { return false }
+                    guard tabCount(of: surfaceView) > 1 else { return false }
 
                     NotificationCenter.default.post(
                         name: .ghosttyMoveTab,
@@ -1321,7 +1330,7 @@ extension Ghostty {
 
                     // Similar to goto_split (see comment there) about our performability,
                     // we should make this more accurate later.
-                    guard (surfaceView.window?.tabGroup?.windows.count ?? 0) > 1 else { return false }
+                    guard tabCount(of: surfaceView) > 1 else { return false }
 
                     NotificationCenter.default.post(
                         name: Notification.ghosttyGotoTab,
