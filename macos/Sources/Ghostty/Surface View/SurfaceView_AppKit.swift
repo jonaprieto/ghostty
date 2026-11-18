@@ -1652,6 +1652,33 @@ extension Ghostty {
             item.setImageIfDesired(systemSymbolName: "pencil.line")
             item = menu.addItem(withTitle: "Change Terminal Title...", action: #selector(changeTitle(_:)), keyEquivalent: "")
 
+            // Fork: show each item's configured keybinding, so the menu
+            // also teaches the shortcuts.
+            let actions: [Selector: String] = [
+                #selector(copy(_:)): "copy_to_clipboard",
+                #selector(paste(_:)): "paste_from_clipboard",
+                #selector(splitRight(_:)): "new_split:right",
+                #selector(splitLeft(_:)): "new_split:left",
+                #selector(splitDown(_:)): "new_split:down",
+                #selector(splitUp(_:)): "new_split:up",
+                #selector(closeSurface(_:)): "close_surface",
+                #selector(resetTerminal(_:)): "reset",
+                #selector(toggleTerminalInspector(_:)): "inspector:toggle",
+                #selector(toggleReadonly(_:)): "toggle_readonly",
+                #selector(BaseTerminalController.changeTabTitle(_:)): "prompt_tab_title",
+                #selector(changeTitle(_:)): "prompt_surface_title",
+            ]
+            if let config = (NSApp.delegate as? AppDelegate)?.ghostty.config {
+                for item in menu.items {
+                    guard let selector = item.action,
+                          let action = actions[selector],
+                          let trigger = config.keybindTrigger(for: action),
+                          let shortcut = Ghostty.keyboardShortcut(for: trigger) else { continue }
+                    item.keyEquivalent = shortcut.key.character.description
+                    item.keyEquivalentModifierMask = .init(swiftUIFlags: shortcut.modifiers)
+                }
+            }
+
             return menu
         }
 

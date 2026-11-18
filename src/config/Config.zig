@@ -2554,7 +2554,10 @@ keybind: Keybinds = .{},
 /// The action to take when the user right-clicks on the terminal surface.
 ///
 /// Valid values:
-///   * `context-menu` - Show the context menu.
+///   * `context-menu` - Show the context menu. In this fork the menu
+///      shows even when the running program captures the mouse (e.g.
+///      tmux with `mouse on`). The program only sees a right-click made
+///      with cmd (super) held, e.g. to open tmux's own menu.
 ///   * `paste` - Paste the contents of the clipboard.
 ///   * `copy` - Copy the selected text to the clipboard.
 ///   * `copy-or-paste` - If there is a selection, copy the selected text to

@@ -237,6 +237,10 @@ const Mouse = struct {
     /// pressed or release.
     mods: input.Mods = .{},
 
+    /// Fork: whether the current right-click went to the native context
+    /// menu rather than to the app. Set on press, used for the release.
+    right_click_menu: bool = false,
+
     /// Gesture state for text selection.
     selection_gesture: terminal.SelectionGesture = .init,
 
@@ -4059,9 +4063,27 @@ pub fn mouseButtonCallback(
         self.renderer_state.mutex.lockUncancelable(global.io());
         defer self.renderer_state.mutex.unlock(global.io());
         if (self.isMouseReporting()) report: {
-            // If we have shift-pressed and we aren't allowed to capture it,
-            // then we do not do a mouse report.
-            if (mods.shift and !shift_capture) break :report;
+            // Fork: right-click opens the native context menu even when
+            // the app captures the mouse. Otherwise tmux (mouse on) gets
+            // the click and shows its own menu; cmd+right-click still goes
+            // to the app for that. The route is decided on press so the
+            // release follows it whatever the modifiers are by then. The
+            // menu swallows the release, so don't leave the button held
+            // for motion reports.
+            if (button == .right and
+                self.config.right_click_action == .@"context-menu")
+            {
+                if (action == .press) self.mouse.right_click_menu =
+                    !mods.super or (mods.shift and !shift_capture);
+                if (self.mouse.right_click_menu) {
+                    self.mouse.click_state[@intCast(@backingInt(button))] = .release;
+                    break :report;
+                }
+            } else {
+                // If we have shift-pressed and we aren't allowed to capture it,
+                // then we do not do a mouse report.
+                if (mods.shift and !shift_capture) break :report;
+            }
 
             // In any other mouse button scenario without shift pressed we
             // clear the selection since the underlying application can handle
