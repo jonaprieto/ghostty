@@ -4586,6 +4586,7 @@ fn processLinks(self: *Surface, pos: apprt.CursorPos) !bool {
             defer if (resolved_path) |p| self.alloc.free(p);
 
             const url_to_open = resolved_path orelse str;
+            self.copyClickedLink(str);
             try self.openUrl(.{ .kind = .unknown, .url = url_to_open });
         },
 
@@ -4594,11 +4595,25 @@ fn processLinks(self: *Surface, pos: apprt.CursorPos) !bool {
                 log.warn("failed to get URI for OSC8 hyperlink", .{});
                 return false;
             };
+            const uri_z = try self.alloc.dupeSentinel(u8, uri, 0);
+            defer self.alloc.free(uri_z);
+            self.copyClickedLink(uri_z);
             try self.openUrl(.{ .kind = .osc8, .url = uri });
         },
     }
 
     return true;
+}
+
+/// Fork: a clicked link is also copied to the clipboard, so it can be
+/// pasted elsewhere after it opens. A failed copy still opens the link.
+fn copyClickedLink(self: *Surface, text: [:0]const u8) void {
+    self.rt_surface.setClipboard(.standard, &.{.{
+        .mime = "text/plain",
+        .data = text,
+    }}, false) catch |err| {
+        log.warn("error copying clicked link to clipboard err={}", .{err});
+    };
 }
 
 fn openUrl(
