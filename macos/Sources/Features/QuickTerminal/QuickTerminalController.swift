@@ -224,6 +224,7 @@ class QuickTerminalController: BaseTerminalController {
 
     override func windowDidBecomeKey(_ notification: Notification) {
         super.windowDidBecomeKey(notification)
+        autoHideHold?.invalidate()
 
         // If we're not visible we don't care to run the logic below. It only
         // applies if we can be seen.
@@ -257,37 +258,89 @@ class QuickTerminalController: BaseTerminalController {
         // when we lose focus.
         hiddenDock?.restore()
 
-        if derivedConfig.quickTerminalAutoHide {
-            switch derivedConfig.quickTerminalSpaceBehavior {
-            case .remain:
-                // If we lose focus on the active space, then we can animate out
-                animateOut()
+        guard derivedConfig.quickTerminalAutoHide else { return }
 
-            case .move:
-                let currentActiveSpace = CGSSpace.active()
-                if previousActiveSpace == currentActiveSpace {
-                    // We haven't moved spaces. We lost focus to another app on the
-                    // current space. Animate out.
-                    animateOut()
-                } else {
-                    // We've moved to a different space.
+        // Fork: dragging a file in from another app (e.g. Finder) takes
+        // focus on mouse down. Hold the autohide until the mouse is up, so
+        // the drag can land here.
+        if NSEvent.pressedMouseButtons & 1 != 0 {
+            holdAutoHideUntilMouseUp()
+        } else {
+            autoHide()
+        }
+    }
 
-                    // If we're fullscreen, we need to exit fullscreen because the visible
-                    // bounds may have changed causing a new behavior.
-                    if let fullscreenStyle, fullscreenStyle.isFullscreen {
-                        fullscreenStyle.exit()
-                        DispatchQueue.main.async {
-                            self.onToggleFullscreen()
-                        }
-                    }
+    /// Set by a drop on the quick terminal while the autohide is held.
+    private var droppedWhileHeld = false
+    private var autoHideHold: Timer?
 
-                    // Make the window visible again on this space
-                    DispatchQueue.main.async {
-                        self.window?.makeKeyAndOrderFront(nil)
-                    }
+    private func holdAutoHideUntilMouseUp() {
+        droppedWhileHeld = false
+        autoHideHold?.invalidate()
+        autoHideHold = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] timer in
+            guard NSEvent.pressedMouseButtons & 1 == 0 else { return }
 
-                    self.previousActiveSpace = currentActiveSpace
+            // ponytail: the drop lands just after the mouse comes up, so
+            // give it a moment before deciding. The timer stays the hold
+            // until then; a new hold or refocus invalidates it.
+            timer.fireDate = .distantFuture
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                guard let self, timer.isValid else { return }
+
+                // Pressed again within the grace period: keep holding.
+                if NSEvent.pressedMouseButtons & 1 != 0 {
+                    timer.fireDate = Date()
+                    return
                 }
+                timer.invalidate()
+                guard self.visible, !self.droppedWhileHeld,
+                      self.derivedConfig.quickTerminalAutoHide,
+                      self.window?.attachedSheet == nil,
+                      self.window?.isKeyWindow != true else { return }
+                self.autoHide()
+            }
+        }
+    }
+
+    /// Fork: something was dropped on the quick terminal. Keep it open and
+    /// focus the split it landed on so typing can continue.
+    func didReceiveDrop(on view: Ghostty.SurfaceView) {
+        droppedWhileHeld = true
+        autoHideHold?.invalidate()
+        // Also makes the panel key and activates the app.
+        focusSurface(view)
+    }
+
+    private func autoHide() {
+        switch derivedConfig.quickTerminalSpaceBehavior {
+        case .remain:
+            // If we lose focus on the active space, then we can animate out
+            animateOut()
+
+        case .move:
+            let currentActiveSpace = CGSSpace.active()
+            if previousActiveSpace == currentActiveSpace {
+                // We haven't moved spaces. We lost focus to another app on the
+                // current space. Animate out.
+                animateOut()
+            } else {
+                // We've moved to a different space.
+
+                // If we're fullscreen, we need to exit fullscreen because the visible
+                // bounds may have changed causing a new behavior.
+                if let fullscreenStyle, fullscreenStyle.isFullscreen {
+                    fullscreenStyle.exit()
+                    DispatchQueue.main.async {
+                        self.onToggleFullscreen()
+                    }
+                }
+
+                // Make the window visible again on this space
+                DispatchQueue.main.async {
+                    self.window?.makeKeyAndOrderFront(nil)
+                }
+
+                self.previousActiveSpace = currentActiveSpace
             }
         }
     }

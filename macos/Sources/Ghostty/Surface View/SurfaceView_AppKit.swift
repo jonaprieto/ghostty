@@ -2334,10 +2334,10 @@ extension Ghostty.SurfaceView: NSMenuItemValidation {
 // MARK: NSDraggingDestination
 
 extension Ghostty.SurfaceView {
-    static let dropTypes: Set<NSPasteboard.PasteboardType> = [
+    static let dropTypes: Set<NSPasteboard.PasteboardType> = Set([
         .string,
         .fileURL,
-    ]
+    ] + NSFilePromiseReceiver.readableDraggedTypes.map { .init($0) })
 
     override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
         guard let types = sender.draggingPasteboard.types else { return [] }
@@ -2364,10 +2364,49 @@ extension Ghostty.SurfaceView {
                 // paste protection as a clipboard paste.
                 self.surfaceModel?.pasteText(content)
             }
+            (window?.windowController as? QuickTerminalController)?.didReceiveDrop(on: self)
             return true
         }
 
-        return false
+        return receivePromisedFiles(pb)
+    }
+
+    /// Fork: the screenshot thumbnail (and apps such as Photos) offer only a
+    /// promise to write the file. Have them write it to a fresh temporary
+    /// folder and paste its path, as for a dropped file.
+    private static let promiseQueue = OperationQueue()
+
+    private func receivePromisedFiles(_ pb: NSPasteboard) -> Bool {
+        guard let receivers = pb.readObjects(forClasses: [NSFilePromiseReceiver.self]) as? [NSFilePromiseReceiver],
+              !receivers.isEmpty else { return false }
+
+        let dir = FileManager.default.temporaryDirectory
+            .appending(path: "ghostty-drops/\(UUID().uuidString)", directoryHint: .isDirectory)
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        } catch {
+            Ghostty.logger.warning("could not create drop folder: \(error, privacy: .public)")
+            return false
+        }
+
+        // Each file arrives on its own, off the main thread since the
+        // provider may take a while to write it; paste them space separated.
+        var pasted = 0
+        for receiver in receivers {
+            receiver.receivePromisedFiles(atDestination: dir, options: [:], operationQueue: Self.promiseQueue) { [weak self] url, error in
+                if let error {
+                    Ghostty.logger.warning("promised file failed: \(error, privacy: .public)")
+                    return
+                }
+                let path = Ghostty.Shell.escape(url.path)
+                DispatchQueue.main.async {
+                    self?.surfaceModel?.pasteText(pasted == 0 ? path : " " + path)
+                    pasted += 1
+                }
+            }
+        }
+        (window?.windowController as? QuickTerminalController)?.didReceiveDrop(on: self)
+        return true
     }
 }
 
