@@ -863,8 +863,8 @@ extension Ghostty {
 
         /// Fork: a clicked path that exists on this Mac opens where it is worked
         /// with. A folder opens in a new split to the right, a text or source file
-        /// in Zed at the clicked `:line[:column]`. Anything else (URLs, PDFs,
-        /// other files) returns false and takes the normal path, which uses the
+        /// in Zed at the clicked `:line[:column]`, an image as a thumbnail in a
+        /// popover. Anything else (URLs, PDFs, other files) returns false and takes the normal path, which uses the
         /// system default apps. Nothing here runs or launches the clicked file.
         private static func openClickedPath(_ action: Action.OpenURL, from surfaceView: SurfaceView) -> Bool {
             guard action.kind == .unknown,
@@ -901,7 +901,14 @@ extension Ghostty {
                 return controller.newSplit(at: surfaceView, direction: .right, baseConfig: config) != nil
             }
 
-            guard let type = UTType(filenameExtension: URL(filePath: path).pathExtension),
+            let type = UTType(filenameExtension: URL(filePath: path).pathExtension)
+            if let type, type.conforms(to: .image), let image = NSImage(contentsOfFile: path),
+               image.size.width > 0, image.size.height > 0 {
+                showImagePreview(image, in: surfaceView)
+                return true
+            }
+
+            guard let type,
                   type.conforms(to: .text) || type.conforms(to: .sourceCode),
                   let zed = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "dev.zed.Zed")
             else { return false }
@@ -917,6 +924,32 @@ extension Ghostty {
                 return false
             }
             return true
+        }
+
+        /// Fork: show a clicked image as a thumbnail in a popover at the
+        /// pointer. Clicking anywhere else closes it.
+        private static func showImagePreview(_ image: NSImage, in view: NSView) {
+            // ponytail: fixed 480pt cap; make it a config if it bites.
+            let side = max(image.size.width, image.size.height, 1)
+            let scale = min(1, 480 / side)
+            let size = NSSize(width: image.size.width * scale, height: image.size.height * scale)
+
+            let imageView = NSImageView(image: image)
+            imageView.imageScaling = .scaleProportionallyUpOrDown
+            imageView.frame = NSRect(origin: .zero, size: size)
+            let controller = NSViewController()
+            controller.view = imageView
+
+            let popover = NSPopover()
+            popover.contentViewController = controller
+            popover.contentSize = size
+            popover.behavior = .transient
+
+            // Anchor at the pointer, kept inside the view.
+            var point = view.convert(view.window?.mouseLocationOutsideOfEventStream ?? .zero, from: nil)
+            point.x = min(max(point.x, 0), view.bounds.width - 1)
+            point.y = min(max(point.y, 0), view.bounds.height - 1)
+            popover.show(relativeTo: NSRect(origin: point, size: NSSize(width: 1, height: 1)), of: view, preferredEdge: .maxY)
         }
 
         private static func openUntrustedURL(_ value: String) -> Bool {
