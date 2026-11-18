@@ -32,7 +32,8 @@ struct SplitView<L: View, R: View>: View {
 
     /// The visible size of the splitter, in points. The invisible size is a transparent hitbox that can still
     /// be used for getting a resize handle. The total width/height of the splitter is the sum of both.
-    private let splitterVisibleSize: CGFloat = 1
+    /// Fork: 3pt instead of 1pt, so a split (a separate tmux session here) is easy to tell apart.
+    private let splitterVisibleSize: CGFloat = 3
     private let splitterInvisibleSize: CGFloat = 6
 
     var body: some View {
@@ -109,12 +110,12 @@ struct SplitView<L: View, R: View>: View {
         switch direction {
         case .horizontal:
             result.size.width *= split
-            result.size.width -= splitterVisibleSize / 2
+            result.size.width = max(0, result.size.width - splitterVisibleSize / 2)
             result.size.width -= result.size.width.truncatingRemainder(dividingBy: self.resizeIncrements.width)
 
         case .vertical:
             result.size.height *= split
-            result.size.height -= splitterVisibleSize / 2
+            result.size.height = max(0, result.size.height - splitterVisibleSize / 2)
             result.size.height -= result.size.height.truncatingRemainder(dividingBy: self.resizeIncrements.height)
         }
 
@@ -130,13 +131,14 @@ struct SplitView<L: View, R: View>: View {
             // For horizontal layouts we offset the starting X by the left rect
             // and make the width fit the remaining space.
             result.origin.x += leftRect.size.width
-            result.origin.x += splitterVisibleSize / 2
-            result.size.width -= result.origin.x
+            result.origin.x += splitterVisibleSize
+            // Nested splits at extreme ratios can leave less than the divider.
+            result.size.width = max(0, result.size.width - result.origin.x)
 
         case .vertical:
             result.origin.y += leftRect.size.height
-            result.origin.y += splitterVisibleSize / 2
-            result.size.height -= result.origin.y
+            result.origin.y += splitterVisibleSize
+            result.size.height = max(0, result.size.height - result.origin.y)
         }
 
         return result
@@ -146,10 +148,10 @@ struct SplitView<L: View, R: View>: View {
     private func splitterPoint(for size: CGSize, leftRect: CGRect) -> CGPoint {
         switch direction {
         case .horizontal:
-            return CGPoint(x: leftRect.size.width, y: size.height / 2)
+            return CGPoint(x: leftRect.size.width + splitterVisibleSize / 2, y: size.height / 2)
 
         case .vertical:
-            return CGPoint(x: size.width / 2, y: leftRect.size.height)
+            return CGPoint(x: size.width / 2, y: leftRect.size.height + splitterVisibleSize / 2)
         }
     }
 

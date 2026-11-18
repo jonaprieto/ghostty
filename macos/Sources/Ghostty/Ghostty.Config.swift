@@ -519,7 +519,11 @@ extension Ghostty {
         var splitDividerColor: Color {
             let backgroundColor = NSColor(backgroundColor)
             let isLightBackground = backgroundColor.isLightColor
-            let newColor = isLightBackground ? backgroundColor.darken(by: 0.08) : backgroundColor.darken(by: 0.4)
+            // Fork: move toward contrast. Darkening a dark background
+            // made the divider nearly invisible.
+            let newColor = (isLightBackground
+                ? backgroundColor.blended(withFraction: 0.25, of: .black)
+                : backgroundColor.blended(withFraction: 0.3, of: .white)) ?? backgroundColor
 
             guard let config = self.config else { return Color(newColor) }
 
