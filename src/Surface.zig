@@ -5237,10 +5237,25 @@ pub fn performBindingAction(self: *Surface, action: input.Binding.Action) !bool 
             {},
         ),
 
-        .paste_from_clipboard => return (try self.startClipboardRequest(
+        .paste_from_clipboard => switch (try self.startClipboardRequest(
             .standard,
             .{ .paste = .standard },
-        )) == .started,
+        )) {
+            .started => {},
+
+            // Fork (macOS): nothing to paste as text, e.g. a screenshot on
+            // the clipboard. Send ctrl+v so TUI apps that read the clipboard
+            // themselves (Claude Code attaches the image) still get a
+            // paste, instead of the binding falling through to the app.
+            // ponytail: also fires on an empty clipboard; a shell then
+            // sees ctrl+v (quoted-insert). Check for an image if that bites.
+            .unavailable => {
+                if (comptime !builtin.target.os.tag.isDarwin()) return false;
+                self.queueIo(.{ .write_stable = "\x16" }, .unlocked);
+            },
+
+            .unsupported => return false,
+        },
 
         .paste_from_selection => return (try self.startClipboardRequest(
             .selection,

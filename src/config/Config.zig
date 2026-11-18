@@ -6726,11 +6726,13 @@ pub const Keybinds = struct {
             else
                 .{ .ctrl = true, .shift = true };
 
+            // Fork: on macOS cmd+c is always consumed. Unperformed, it
+            // reached the app as super+c, which tmux turns into meta+c.
             try self.set.putFlags(
                 alloc,
                 .{ .key = .{ .unicode = 'c' }, .mods = mods },
                 .{ .copy_to_clipboard = .mixed },
-                .{ .performable = true },
+                .{ .performable = !builtin.target.os.tag.isDarwin() },
             );
             try self.set.putFlags(
                 alloc,
@@ -10682,6 +10684,19 @@ const TestIterator = struct {
         return result;
     }
 };
+
+test "fork: macOS cmd+c is consumed without a selection" {
+    if (comptime !builtin.target.os.tag.isDarwin()) return error.SkipZigTest;
+    const testing = std.testing;
+    var cfg = try Config.default(testing.allocator);
+    defer cfg.deinit();
+
+    const entry = cfg.keybind.set.get(.{
+        .key = .{ .unicode = 'c' },
+        .mods = .{ .super = true },
+    }) orelse return error.TestUnexpectedResult;
+    try testing.expect(!entry.value_ptr.leaf.flags.performable);
+}
 
 test "parse hook: invalid command" {
     const testing = std.testing;
